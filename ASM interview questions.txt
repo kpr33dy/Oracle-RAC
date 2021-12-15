@@ -1,0 +1,605 @@
+﻿ASM:
+====
+
+1.  How to migrate non-asm to asm instance?
+
+
+1. ASM instance should be created and up and running. 
+2. 1) Check the database version and status
+
+3.  We should be able to check the ASM disk name available from the instance which we created earlier
+
+  SQL> select NAME,STATE,TOTAL_MB,PATH from v$asm_disk;
+  
+   NAME                           STATE      TOTAL_MB PATH
+   ------------------------------ -------- ---------- ----------
+   DISK1                          NORMAL         4777 ORCL:DISK1
+
+
+4.  1) If you are using a spfile, take a backup of spfile using rman to restore it to ASM disk
+
+   RMAN>BACKUP AS BACKUPSET SPFILE;
+
+5.  3) Now restore the spfile from the backup to ASM disk as below
+
+  RMAN>RESTORE SPFILE TO '+DATA/spfilelearndb.ora';
+
+ Delete "spfile<sid>.ora and init<sid>.ora from the $ORACLE_HOME/dbs directory and create a new init<sid>.ora and point out spfile asm location in the new pfile.
+   
+   vi initlearndb.ora
+   SPFILE='+DATA/spfilelearndb.ora'
+   
+4) after that we need to restart the database and check the spfile was restored in asm disk
+
+ 
+
+   SQL> Startup (  first it will search for spfile<sid>.ora which we deleted and next it will look for init<sid>.ora which we have moified with the above content  )
+
+   SQL> show parameter spfile
+
+    NAME                                 TYPE        VALUE
+   ------------------------------------ ----------- ------------------------------
+   spfile                               string      +DATA/spfilelearndb.ora
+
+7) We should be check the control file, datafile and redo logfile locations in database instance.
+   
+8)  SQL> startup the database in nomount stage
+
+You can move these control files to ASM using RMAN
+
+    [oracle@coltdb04 ~]$ rman target /
+
+    Recovery Manager: Release 11.2.0.3.0 - Production on Fri Jun 29 03:04:39 2012
+
+    Copyright (c) 1982, 2011, Oracle and/or its affiliates.  All rights reserved.
+
+    connected to target database: LEARNDB (not mounted)
+
+
+RMAN>  restore controlfile to '+DATA' from '/u01/data/learndb/control01.ctl';
+	
+You can check whether the control file are created
+
+   ASMCMD> find -t CONTROLFILE +DATA *
+   WARNING:option 't' is deprecated for 'find'
+   please use 'type'
+   
+      +DATA/LEARNDB/CONTROLFILE/current.256.787200593
+
+
+5) Update new control file location with the spfile 
+
+   SQL> alter system set control_files='+DATA/LEARNDB/CONTROLFILE/current.256.787200593' scope=spfile;
+
+6) Now shutdown the instance and startup in mount stage and check for the control file location
+  
+   SQL> shutdown immediate
+
+   SQL> startup mount
+
+   SQL> show parameter control_files
+
+       NAME                                 TYPE        VALUE
+     ------------------------------------ ----------- ------------------------------
+     control_files                        string      +DATA/learndb/controlfile/curr
+                                                      ent.256.787200593
+2) after that we need to migrate the datafiles from filesystem to ASM disk using RMAN "BACKUP AS COPY" method 
+
+RMAN> BACKUP AS COPY DATABASE FORMAT '+DATA';
+
+
+3)  Switch the database to the copy created.
+
+   RMAN> SWITCH DATABASE TO COPY;
+
+4) Migrate the tempfile to ASM using RMAN
+
+   RMAN> run
+   2> {
+   3> set newname for tempfile '/u01/data/learndb/temp01.dbf' to '+DATA';
+   4> switch tempfile all;
+   5> }
+
+5) Now open the Database
+
+   RMAN> ALTER DATABASE OPEN;
+   
+   1) Identify the currently available redo log files using the following command
+
+   SQL> SELECT a.group#, b.member, a.status FROM v$log a, v$logfile b WHERE a.group#=b.group#;
+   
+   
+2) Add the new logfiles to ASM using following command
+
+   ALTER DATABASE ADD LOGFILE MEMBER '+DATA' TO GROUP 1; 
+   ALTER DATABASE ADD LOGFILE MEMBER '+DATA' TO GROUP 2;
+   ALTER DATABASE ADD LOGFILE MEMBER '+DATA' TO GROUP 3;
+   
+3)  Then drop the old logfiles 
+
+drop the old logfiles, 
+
+ALTER DATABASE DROP LOGFILE MEMBER '/u01/data/learndb/redo01.log';
+   ALTER SYSTEM SWITCH LOGFILE;
+   ALTER DATABASE DROP LOGFILE MEMBER '/u01/data/learndb/redo02.log';
+   ALTER SYSTEM SWITCH LOGFILE;
+   ALTER DATABASE DROP LOGFILE MEMBER '/u01/data/learndb/redo03.log';
+
+=====================================================================================================================
+
+2.  How to add disk to asm diskgroup ?
+
+Use "grid" user inquires the current diskgroup,disk.
+
+then we need to connect sysasm user with asm instance.
+
+SQL> set lines 150  
+SQL> col failgroup format a15  
+SQL> col name format a20  
+SQL> col path format a20  
+SQL> alter session set nls_date_format='yyyy-mm-dd hh24:mi:ss';  
+  
+Session altered.  
+  
+SQL> select disk_number,failgroup,create_date,path,name from v$asm_disk;  
+  
+DISK_NUMBER FAILGROUP       CREATE_DATE     PATH             NAME  
+----------- --------------- ------------------- -------------------- --------------------  
+      1               						/dev/asm-diske  
+      0 DATADG_0000     2013-01-04 16:31:06 /dev/asm-diskc       DATADG_0000  
+      0 CRS_0000        2013-01-04 16:15:51 /dev/asm-diskb       CRS_0000  
+      0 FRADG_0000      2013-01-04 16:31:40 /dev/asm-diskd       FRADG_0000  
+  
+  
+  
+SQL> show parameter instance_name  
+  
+NAME                     TYPE           VALUE  
+------------------------------------ ---------------------- ------------------------------  
+instance_name                string         +ASM1  
+
+SQL> select name from v$asm_diskgroup;  
+  
+NAME  
+--------------------  
+CRS  
+DATADG  
+FRADG  
+
+SQL> alter diskgroup fradg add disk '/dev/asm-diske';  
+  
+Diskgroup altered.  
+  
+SQL> alter session set nls_date_format='yyyy-mm-dd hh24:mi:ss';  
+  
+Session altered.  
+  
+SQL> col path format a20  
+SQL> col name format a20  
+SQL> col failgroup format a15  
+SQL> set lines 150  
+SQL> select disk_number,failgroup,create_date,path,name from v$asm_disk;  
+  
+DISK_NUMBER FAILGROUP       CREATE_DATE     PATH             NAME  
+----------- --------------- ------------------- -------------------- --------------------  
+      0 DATADG_0000     2013-01-04 16:31:06 /dev/asm-diskc       DATADG_0000  
+      1 FRADG_0001      2013-01-07 15:56:10 /dev/asm-diske       FRADG_0001  
+      0 CRS_0000        2013-01-04 16:15:51 /dev/asm-diskb       CRS_0000  
+      0 FRADG_0000      2013-01-04 16:31:40 /dev/asm-diskd       FRADG_0000  
+
+
+SQL> alter diskgroup fradg rebalance;  
+  
+Diskgroup altered.  
+  
+SQL> select * from v$asm_operation;  
+  
+no rows selected  
+  
+SQL> /  
+  
+no rows selected  
+  
+SQL>   
+
+=====================================================================================================================
+
+3.  ASM Power limit?
+
+ASM_POWER_LIMIT specifies the maximum power on an ASM instance for disk rebalancing. The higher the limit, the faster rebalancing will complete. Lower values will take longer, but consume fewer processing and I/O resources.
+
+If the POWER clause of a rebalance operation is not specified, then the default power will be the value of ASM_POWER_LIMIT.
+
+ASM Rebalance power limit from 0 – 1024 starting from 11.2.0.2
+
+=====================================================================================================================
+
+4.  Is ASM using controlfile?
+
+NO.
+
+=====================================================================================================================
+
+5.  Huge database (5 TB) how to allocate extents in asm instance?
+
+
+
+=====================================================================================================================
+
+6.  When you drop asm disk that time what happened internally?
+
+When you add or drop a disk to ASM diskgroup, Oracle performs Rebalance operation to evenly distribute file extents and space usage across all disks in the diskgroup. 
+
+
+When you add/drop a disk to/from a diskgroup, ASM invokes RBAL process which create the rebalance plan and coordinates the redistribution. RBAL calculates estimated time and work required to perform the task. RBAL hand off the work to the ARBx. Number of ARBx processes that started is defined by ASM_POWER_LIMIT initialization parameter or the limit specified in the actual add/drop command. The continuing operations directory is updated to reflect a rebalance activity. ARBx processes performs the actual rebalancing on the file extents. You can view the rebalancing operation in V$ASM_OPERATION. 
+
+
+=====================================================================================================================
+
+7.  ASM background processes?
+
+ASMB - Connects to the ASM instance via session and is the communication between ASM and RDBMS, requests could be file creation, deletion, resizing and also various statistics and status messages.
+
+This ASMB process is used to provide information to and from cluster synchronization services used by ASM to manage the disk resources. It's alsao used to update statistics and provide a heart beat mechanism.
+
+Re-Balance, RBAL - RBAL is the ASM related process that performs rebalancing of disk resources controlled by ASM.
+
+Actual Rebalance, ARBx - ARBx is configured by ASM_POWER_LIMIT.
+
+=====================================================================================================================
+
+8.  How rebalance are work?
+
+It is important to know why the rebalance is running. If you are adding a new disk, say to increase the available disk group space, it doesn't really matter how long it will take for the rebalance to complete. OK maybe it does, if your database is hung because you ran out of space in your archive log destination. Similarly if you are resizing or dropping disk(s), to adjust the disk group space, you are generally not concerned with the time it takes for the rebalance to complete.
+
+But if a disk has failed and ASM has initiated rebalance, there may be legitimate reason for concern. If your disk group is normal redundancy AND if another disk fails AND it's the partner of that disk that has already failed, your disk group will be dismounted, all your databases that use that disk group will crash and you may lose data. In such cases I understand that you want to know when that rebalance will complete. Actually, you want to see the relocation phase completed, as once it does, all your data is fully redundant again.
+
+http://asmsupportguy.blogspot.in/2012/07/when-will-my-rebalance-complete.html
+
+=====================================================================================================================
+
+9.  What are ASM instance parameters?
+
+The main parameters in the instance parameter file will be
+
+instance_type - you have two types RDBMS or ASM
+instance_name - the name of the ASM instance
+asm_power_limit - maximum speed of rebalancing disks, default is 1 and the range is 1 - 11 (11 being the fastest)
+asm_diskstring - this is the location were oracle will look for disk discovery
+asm_diskgroups - diskgroups that will be mounted automatically when the ASM instance is started.
+
+=====================================================================================================================
+
+10. Why you should have ASM home is separate from oracle home?
+
+With separate Oracle homes, you can upgrade and patch ASM and databases independently, and you can deinstall database software without impacting the ASM 
+instance. 
+
+If you are running a single database instance on a server or node and have no plans to 
+add one or more database instances to this server or node, ASM and the database can 
+share a single Oracle home. 
+
+
+=====================================================================================================================
+
+
+11. What is intermediate process of oracle instance and asm instnace?
+
+connects to the ASM instance via session and is the communication between ASM and RDBMS, requests could be file creation, deletion, resizing and also various statistics and status messages.
+
+
+=====================================================================================================================
+
+
+12. What is usage of CSSd process 
+
+
+This process is necessary for a new 10g feature in ASM . It is used for communication between a database instance and the ASM instance.
+
+this process is started and controlled by the OS, not by Oracle. Corresponding file init.cssd is a part of /etc/init.d and therefore automatically started at boot time. Someone with root privileges must remove the start file.
+
+
+ASM registers its name and disks with the RDBMS via the cluster synchronization service (CSS). This is why the oracle cluster services must be running, even if the node and instance is not clustered. The ASM must be in mount mode in order for a RDBMS to use it and you only require the instance type in the parameter file.
+
+=====================================================================================================================
+
+
+
+13. WHat is asm alias?
+
+Aliases
+
+Aliases allow you to reference ASM files using user-friendly names, rather than the fully qualified ASM filenames.
+
+-- Create an alias using the fully qualified filename.
+ALTER DISKGROUP disk_group_1 ADD ALIAS '+disk_group_1/my_dir/my_file.dbf'
+  FOR '+disk_group_1/mydb/datafile/my_ts.342.3';
+  
+=====================================================================================================================
+
+
+14. How to export and import from non-asm to asm?
+
+
+
+=====================================================================================================================
+
+15. What external,  normal and high ?
+
+External redundancy - doesn't have failure groups and thus is effectively a no-mirroring strategy
+Normal redundancy - provides two-way mirroring of all extents in a disk group, which result in two failure groups
+High redundancy - provides three-way mirroring of all extents in a disk group, which result in three failure groups
+
+=====================================================================================================================
+
+16. How many header status that an ASM disk ?
+
+
+MEMBER :
+
+After we add the new disk DATAFILE diskgroup capacity got increased and header status of that new disk also got changed to MEMBER!
+
+Disks that belong to a disk group, that is, disks that have a disk group name in the disk header, show a header status of MEMBER.
+
+CANDIDATE :
+
+A newly created ASM disk header status will be of CANDIDATE in all unix box and PROVISONED on Linux.
+Since my host is based on Unix box the header status is on CANDIDATE. 
+
+Disks that were discovered, but that have not yet been assigned to a disk group, have a status of CANDIDATE
+
+PROVISIONED :
+
+PROVISIONED status implies that an additional platform-specific action has been taken by an administrator to make the disk available for Oracle ASM. These disks are discovered by ASM
+
+FORMER :
+
+As you can see after removing above two disks from diskgroup the disk's header status has changed to FORMER.
+ASM disk with the header status of Former indicates that those disk were already part of the diskgroup and now it can be added into existing diskgroup or New diskgroup.
+
+Disks that previously belonged to a disk group and were dropped cleanly from the disk group have a status of FORMER.
+
+FOREIGN :
+
+When adding a disk, the FORCE option must be used if Oracle ASM recognizes that the disk was managed by Oracle. Such a disk appears in the V$ASM_DISK view with a status of FOREIGN. In this case, you can only add the disk to a disk group by using the FORCE keyword.
+
+
+=====================================================================================================================
+ 
+17.  When dropped asm disk, space is not released?
+
+
+As I created, dropped and recreated databases with the same name, there was archivelog of an old database that was not purged by RMAN backups and that stayed in my ASM diskgroup.
+I manually dropped the directories in ASMCMD with a "rm -rf" command and the free space is now correct.	
+
+ALTER DISKGROUP DG10 CHECK ALL REPAIR;
+
+=====================================================================================================================
+
+18.  How to down the asm instance in 11gr2?
+
+
+
+=====================================================================================================================
+
+19.  gpnp profile?
+
+1. When a node of an Oracle Clusterware cluster restarts, OHASD is started by platform-specific means. OHASD is the root for bringing up Oracle Clusterware. OHASD has access to the OLR (Oracle Local Registry) stored on the local file system. OLR provides needed data to complete OHASD initialization 
+
+2. OHASD brings up GPNPD and CSSD. CSSD has access to the GPNP Profile stored on the local file system. This profile contains the following vital bootstrap data; 
+a. ASM Diskgroup Discovery String 
+b. ASM SPFILE location (Diskgroup name) 
+c. Name of the ASM Diskgroup containing the Voting Files 
+
+OLR holds metadata for the local node and in conjunction with GPnP profile OHASD has all the information required initially to join the node to the cluster and OHASD manages OLR. so both OLR and GPnP profile is essential and required. 
+
+
+=====================================================================================================================
+
+20.  connection strings in asm?
+
+=====================================================================================================================
+
+21. ASM cloning ?
+
+=====================================================================================================================
+
+22.  
+
+
+
+ASM instance crashed but disk group is available?  how to create new asm instance?
+
+RAC:
+====
+
+1.  What activities are you doing in RAC environment?
+upgrade, patch apply, maintenance activity  
+
+=====================================================================================================================
+
+2.  what is scan ip and how it will work internal?
+
+
+scan?
+
+Single Client Access Name (SCAN) is s a new Oracle Real Application Clusters (RAC) 11g Release 2 feature that provides a single name for clients to access an Oracle Database running in a cluster. The benefit is clients using SCAN do not need to change if you add or remove nodes in the cluster.
+
+=====================================================================================================================
+
+3.  What is usage of private network?
+
+prt?
+Private Interconnect:
+It is a high bandwidth and low latency inter-communication setup used for transferring the heartbeat messages among all the nodes of the cluster
+•	Identifying health, status and message synchronization among all the instances.
+•	 Used for transferring global resource lock requests among all the instances.
+•	 Heavily used for transferring data blocks from one instances buffer cache to other instance buffer cache.
+
+=====================================================================================================================
+
+4.  What is usage of public network?
+
+For communicating with the shared storage.
+
+=====================================================================================================================
+
+5.  what is usage of VIP network?
+
+Vip?
+•	A dummy network created on top of the public network & recommended for the user session to connect with RAC database.
+
+=====================================================================================================================
+
+6.  What is usage of cache fusion?
+
+Cache Fusion is the remote memory mapping of Oracle buffers
+•	is the process of transferring the available data blocks from 1 instance buffer cache to other instance buffer cache by using existing private network.
+•	 Avoids expensive hardware intense disk reads
+
+=====================================================================================================================
+
+7.  what is use of  ocr and votting disk? and how to take backup of ocr and votting disk?
+
+OCR?
+•	 It is a critical shared file which completes cluster info like cluster node names, corresponding IP addresses, CSS Parameters, OCR Backup info and registered resources like node apps, ASM Instances, Databases, Database Instances & DB Services, etc.
+
+•	 Every node specific CRSD daemon is responsible for maintaining and updating OCR file.
+•	 CRSD daemon automatically brings up all the services which have got registered into OCR as it gets up
+
+
+Vd?
+Another crucial and shared file which contains all the cluster node membership info & their IP's and subnet masks, etc.
+Every node specific CSSD daemon is responsible for sending heartbeat messages to all the other nodes for every one second and receive the heartbeat messages from other nodes and stores the response into VD.
+
+
+
+=====================================================================================================================
+
+7a.
+
+  Service will relocate to available instance if preferred instance becomes unavailable:
+
+=====================================================================================================================
+
+8.  why we required to maintain odd number of voting disks?
+
+
+=====================================================================================================================
+
+
+9.  how to create service in rac database?
+
+[oracle@Rac1 ~]$ srvctl add service -s NEWSRV -r RAC1 -a RAC2 -d RAC
+
+[oracle@Rac1 ~]$ srvctl add service -s NEWSRV1 -d RAC -r rac1, rac2
+
+=====================================================================================================================
+
+10. What is RAC background processes?
+
+LMS?
+
+LMSn (Global Cache Service Process):
+
+Actual process of transferring data blocks from one instance buffer cache to another instance buffer cache.
+Controlled by gcs_server_processes parameter
+
+
+LMON?
+
+LMON (Global Enqeueue Service Monitor):
+Responsible for maintaining GRD consistency among all the instances of a database.
+
+LMD?
+
+LMD (Global Enqueue Service Daemon):
+Responsible for maintaining global lock requests.
+
+LCK?
+
+LCK (Lock Process):
+Handles all the non-Cache Fusion operations
+
+DIAG?
+
+DIAG:
+Updates the diagnostic info into trace files and alert log files whenever server process or any other background process needs diagnosability.
+
+
+=====================================================================================================================
+
+11. Node eviction?
+
+=====================================================================================================================
+
+12. how to apply the patches?
+
+=====================================================================================================================
+
+13. What is rolling upgrade ?
+=====================================================================================================================
+
+
+14. What is GRD?
+
+GRD?
+Global Resource Directory (GRD)
+
+A new memory component which is a part of shared pool and can be seen only in RAC specific instances.
+
+-	 Oracle automatically maintains GRD consistency among all the instances of a common DB by using LMON background process.
+
+-	 GRD maintains metadata info of data blocks like
+
+ - SCN#
+ - Data Block Address.
+ - Location of the most recent version of the block.
+ - Mode of the Block (NULL, SHARED, EXCLUSIVE)
+ - Role of the block (LOCAL, GLOBAL)
+ - Type of Block Image (CURRENT, CONSISTENT READ, PAST IMAGE)
+•	GRD is maintained by communicating with GES & GCS.
+
+
+GES?
+•	 Global Enqueue Services (GES):
+	Coordinates with the Global Lock Requests and non-cache fusion operations with the help of LMD & LCK background processes.	
+	
+GCS?
+ Global Cache Services (GCS)
+	Maintains by coordinating with cache fusion operations with the help of  LMSn background process.
+
+
+
+
+
+=====================================================================================================================
+
+15.  What are the major RAC wait events?
+=====================================================================================================================
+
+16.  Give few examples for solutions that support cluster storage?
+
+
+ASM(automatic storage management),raw disk devices,network file system(NFS), OCFS2 and OCFS(Oracle Cluster Fie systems).
+
+=====================================================================================================================
+
+
+17.  What is node apps?
+
+
+=====================================================================================================================
+
+18.  what is server side and client side load balancing?
+
+=====================================================================================================================
+
+19.  What is common parameters in RAC?
+
+
+=====================================================================================================================
+
+
+
+split-brain it occurs when the instance members in a RAC fail to ping/connect to each other via this private interconnect, but the servers are all physically up and running and the database instance on each of these servers is also running. These individual nodes are running fine and can conceptually accept user connections and work independently. So basically due to lack of communication the instance thinks that the other instance that it is not able to connect is down and it needs to do something about the situation. The problem is if we leave these instance running, the same block might get read, updated in these individual instances and there would be data integrity issue, as the blocks changed in one instance, will not be locked and could be over-written by another instance. Oracle has efficiently implemented check for the split brain syndrome. 

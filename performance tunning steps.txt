@@ -1,0 +1,493 @@
+﻿Performance tunning:
+===================
+we need to check the os level performance.
+
+1. Top, topas, glance & vmstat.  In this commands we can check the 
+
+CPU, Memory, DISK I/O, Network then we can also check the top level PID.  Which PID is taking more CPU and memory.
+
+2. Alertlog file.
+
+3. After that we can take statspack or AWR report in database level.  Suppose users are stating the issue only specific time then we need to take report that particular time and previous days.  We need to compare with previous days report.  
+
+4. After that we can take archive log generation report hourly and daily basis in monthly wise and compare to previous days and hours.  
+
+4a.)  we can check backup information.  any backups are running long time then we need to check backup details.
+
+5. Suppose everything is normal in OS level and AWR report and no archive log generation and no backups are running then we can ask the users what exactly they are doing from their end.  
+
+6. If they are running update or delete statements then we can check the locks in the table level.  If lock is there we should be kill the sessions and ask to restart their work. but before killing the sessions also we can check the block level changes.  If it is happening then we can wait for some time.
+
+7. If they are running select commands, we can generate the sql tuning advisor for that sql and depends upon the recommendations we can take actions
+
+8. Suppose if we are not getting any recommendation from sql tuning advisor then we need check the table level health check up. (like high water mark, row chaining, statistic, stale stats, plans and index details)  
+
+9.	Then we can check the plans.  How many plans are using this sql.  Suppose it is using more than one plan then we need to check which one is best.  We can check the plan details in DBA_HIST_SQLSTAT with DBA_HIST_SNAPSHOT views.
+
+10.  We should be check inactive session details as well as session level memory details and cpu details in database level.
+
+11.  We can check any new jobs are scheduled in recently.  (job loads, mview refresh) 
+
+11.  Everything is fine then how much memory is allocating shared_pool, buffer_cache, java_pool in sga_target.  
+
+SQL Ordered by Elapsed Time: Includes SQL statements that took significant execution time during processing.
+
+SQL Ordered by CPU Time: Includes SQL statements that consumed significant CPU time during its processing.
+
+SQL Ordered by Gets: These SQLs performed a high number of logical reads while retrieving data.
+
+SQL Ordered by Reads: These SQLs performed a high number of physical disk reads while retrieving data.
+
+SQL Ordered by Parse Calls: These SQLs experienced a high number of reparsing operations.
+
+SQL Ordered by Sharable Memory: Includes SQL statements cursors which consumed a large amount of SGA shared pool memory.
+
+SQL Ordered by Version Count: These SQLs have a large number of versions in shared pool for some reason.
+
+
+============================
+
+A materialized views contains space and storage just like a regular table.  You can even partition them and create indexes on them. Materialized views take a snapshot of the underlying tables which means that data may not represent the source data.   To get the materialized view data up to date you must refresh it.
+
+Refresh Modes
+ON COMMIT 	When data is committed in the master table the view is automatically refreshed
+ON DEMAND (default) You have to execute DBMS_MVIEW.REFRESH to update the view.
+Refresh Types
+COMPLETE 	This will completely rebuild the view, so if it took 2 hours to build originally it will take 2 hours to rebuild.
+FAST 	The materialized view will use a log to log all changes to the master tables, each table within the view will have its own log file. It will then use the materialized view log to update the tables.
+FORCE (default) 	Oracle will first use the FAST option then the COMPLETE option.
+NEVER 	Never refresh the materialized view,use this if the underlying tables never change.
+
+
+
+============================
+
+Duplicate database using RMAN on the same host
+==============================================
+
+
+dup?
+
+Steps
+
+1.  Identify the  Backup of the primary database.
+
+2.  Determine how much disk space will be required.
+
+3.  Ensuring you have enough space on your target server.
+
+4.  Making the backup available for the duplicate process.
+
+5.  Creating the init.ora & administration directories for the duplicate database.
+
+if it is exiting database we need to take user creation script backup and passwords, dblinks backups
+
+
+6.  Ensuring SQL*NET connections to primary database are working.
+
+7.  Prepare RMAN duplicate script.
+
+8.  Execute the RMAN script.
+
+1.  Identify and Backup the primary database.
+RMAN> list backup;
+
+RMAN> backup device type sbt database plus archivelog;
+
+2.  Determine how much disk space will be required.
+
+After deciding what you will be duplicating, calculate the entire space this will required on the host. 
+
+SQL> select round(sum(bytes)/1048576) ||' M - DATA' as DATA
+from dba_data_files;
+select round(sum(bytes)/1048576) ||' M - TEMP' as TEMP
+from dba_temp_files;
+select round(sum(bytes)/1048576) ||' M - LOGS' as LOGS
+from v$log;
+
+1230 M -  DATA
+100 M - TEMP
+30 M -  LOGS
+
+3.  Ensuring you have enough space on your target server.
+
+Prior to starting the duplicate process you must ensure you have enough disk space within file system to hold the database.
+
+dgtest9i:/opt/oracle>df -h
+Filesystem            Size  Used Avail Use% Mounted on
+/dev/cciss/c0d0p8     4.9G  1.4G  3.2G  31% /
+/dev/cciss/c0d0p2      25G   19G  4.4G  81% /opt
+/dev/cciss/c0d0p11     14G   12G  2.1G  85% /u01
+
+4.  Making the backup available for the duplicate process.
+
+5.  Creating the init.ora & administration directories for the duplicate database.
+
+ /opt/oracle/admin/> cp –rp dgtest9i dupdb
+
+SQL> select distinct substr(name,1,instr(UPPER(name),'ORACLE',1) - 1) "FILESYSTEM"
+from v$datafile
+UNION
+select distinct substr(member,1,instr(UPPER(member),'ORACLE',1) - 1) "FILESYSTEM"
+from v$logfile
+UNION
+select distinct substr(name,1,instr(UPPER(name),'ORACLE',1) - 1) "FILESYSTEM"
+from v$controlfile;
+
+6.  Ensuring SQL*NET connections to primary database are working.
+
+*.background_dump_dest='/opt/oracle/admin/dupdb/bdump'
+*.control_files='/u01/ORACLE/dupdb/control01.ctl'
+*.core_dump_dest='/opt/oracle/admin/dupdb/cdump'
+*.db_block_size=16384
+*.db_cache_size=104857600
+*.db_file_multiblock_read_count=8
+*.db_file_name_convert='/u01/ORACLE/dgtest9i/','/u01/ORACLE/dupdb/'
+*.db_name='dupdb'
+*.java_pool_size=52428800
+*.job_queue_processes=10
+*.large_pool_size=8388608
+*.log_archive_dest_1='LOCATION=/u01/ORACLE/dupdb/arch'
+*.log_archive_dest_state_1='ENABLE'
+*.log_archive_format='arch%s.log'
+*.log_archive_start=TRUE
+*.log_buffer=1048576
+*.log_checkpoints_to_alert=TRUE
+*.log_file_name_convert='/u01/ORACLE/dgtest9i/','/u01/ORACLE/dupdb/'
+*.shared_pool_size=104857600
+
+Ensure the db_file_name_convert  parameter is set appropiately. This parameter will instruct RMAN to convert the primary database filenames to the target database filenames. One can use the SET NEWNAME parameter too in the RMAN script  then db_file_name_convert parameter is not needed. 
+
+7.	Create password file for new db
+
+:/opt/oracle>. setdupdb
+dupdb:/opt/oracle> cd $ORACLE_HOME/dbs
+dupdb:/opt/oracle/product9204/dbs>orapwd file=orapwdupdb password=oracle entries=5
+dupdb:/opt/oracle/product9204/dbs>
+
+8.  Prepare RMAN duplicate script.
+
+run{
+allocate channel C1 DEVICE TYPE 'SBT_TAPE' PARMS 'ENV=(TDPO_OPTFILE=/opt/tivoli/tsm/client/oracle/bin64/tdpo.dgtest9id.opt)'; 
+ allocate auxiliary channel aux1 device type 'SBT_TAPE' PARMS 'ENV=(TDPO_OPTFILE=/opt/tivoli/tsm/client/oracle/bin64/tdpo.dgtest9id.opt)'; 
+ SET UNTIL SEQUENCE 256 THREAD 1;
+duplicate target database to dupdb;
+ }
+
+9.  Execute the RMAN script.
+
+After registering this database in the listener. You may  do a TNS promote.
+
+=========================
+
+Setting Shared Memory
+
+Shared memory allows processes to access common structures and data by placing them in a shared memory segment. This is the fastest form of Inter-Process Communications (IPC) available - mainly due to the fact that no kernel involvement occurs when data is being passed between the processes. With shared memory, data does not need to be copied between processes.
+Oracle makes use of shared memory for its Shared Global Area (SGA) which is an area of memory that is shared by all Oracle backup and foreground processes. Adequate sizing of the SGA is critical to Oracle performance since it is responsible for holding the database buffer cache, shared SQL, access paths, and so much more.
+
+To determine all shared memory limits, use the following:
+
+# ipcs -lm
+
+------ Shared Memory Limits --------
+max number of segments = 4096
+max seg size (kbytes) = 4194303
+max total shared memory (kbytes) = 1073741824
+min seg size (bytes) = 1
+Setting SHMMAX
+
+The SHMMAX parameters defines the maximum size (in bytes) for a shared memory segment. The Oracle SGA is comprised of shared memory and it is possible that incorrectly setting SHMMAX could limit the size of the SGA. When setting SHMMAX, keep in mind that the size of the SGA should fit within one shared memory segment. An inadequate SHMMAX setting could result in the following:
+ORA-27123: unable to attach to shared memory segment
+You can determine the value of SHMMAX by performing the following:
+
+Semaphores are data structures within the operating system that function like signals for memory process communications. For Oracle, semaphores tell the Oracle processes when to stop, wait or start operations. In addition, semaphores tell Oracle processes when they are to resume processing. Each Oracle process has its own semaphore assigned to it.
+
+Setting Semaphores
+
+Now that you have configured your shared memory settings, it is time to configure the semaphores. The best way to describe a "semaphore" is as a counter that is used to provide synchronization between processes (or threads within a process) for shared resources like shared memory. Semaphore sets are supported in UNIX System V where each one is a counting semaphore. When an application requests semaphores, it does so using "sets".
+To determine all semaphore limits, use the following:
+
+# ipcs -ls
+
+------ Semaphore Limits --------
+max number of arrays = 128
+max semaphores per array = 250
+max semaphores system wide = 32000
+max ops per semop call = 32
+semaphore max value = 32767
+You can also use the following command:
+# cat /proc/sys/kernel/sem
+250     32000   32      128
+
+Setting SEMMSL
+
+The SEMMSL kernel parameter is used to control the maximum number of semaphores per semaphore set.
+Oracle recommends setting SEMMSL to the largest PROCESS instance parameter setting in the init.ora file for all databases on the Linux system plus 10. Also, Oracle recommends setting the SEMMSL to a value of no less than 100.
+
+Setting SEMMNI
+
+The SEMMNI kernel parameter is used to control the maximum number of semaphore sets in the entire Linux system.
+Oracle recommends setting the SEMMNI to a value of no less than 100.
+
+Setting SEMMNS
+
+The SEMMNS kernel parameter is used to control the maximum number of semaphores (not semaphore sets) in the entire Linux system.
+
+Oracle recommends setting the SEMMNS to the sum of the PROCESSES instance parameter setting for each database on the system, adding the largest PROCESSES twice, and then finally adding 10 for each Oracle database on the system.
+
+Use the following calculation to determine the maximum number of semaphores that can be allocated on a Linux system. It will be the lesser of:
+
+SEMMNS  -or-  (SEMMSL * SEMMNI)
+Setting SEMOPM
+
+The SEMOPM kernel parameter is used to control the number of semaphore operations that can be performed per semop system call.
+The semop system call (function) provides the ability to do operations for multiple semaphores with one semop system call. A semaphore set can have the maximum number of SEMMSL semaphores per semaphore set and is therefore recommended to set SEMOPM equal to SEMMSL.
+
+Oracle recommends setting the SEMOPM to a value of no less than 100.
+
+Setting Semaphore Kernel Parameters
+
+Finally, we see how to set all semaphore parameters. In the following, the only parameter I care about changing (raising) is SEMOPM. All other default settings should be sufficient for our example installation.
+You can alter the default setting for all semaphore settings without rebooting the machine by making the changes directly to the /proc file system (/proc/sys/kernel/sem) using the following command:
+# sysctl -w kernel.sem="250 32000 100 128"
+You should then make this change permanent by inserting the kernel parameter in the /etc/sysctl.conf startup file:
+# echo "kernel.sem=250 32000 100 128" >> /etc/sysctl.conf
+
+===============================
+
+
+If SSH is configured correctly, you will be able to use the ssh and scp commands without being prompted for a password or pass phrase from this terminal session:
+
+====================================================
+
+After the installation of Oracle Clusterware, we can run through several tests to verify the install was successful. Run the following commands on both nodes in the RAC cluster.
+Check Cluster Nodes
+
+$ $ORA_CRS_HOME/bin/olsnodes -n
+linux1  1
+linux2  2
+
+Confirm Oracle Clusterware Function
+
+$ $ORA_CRS_HOME/bin/crs_stat -t -v
+
+Name           Type           R/RA   F/FT   Target    State     Host
+----------------------------------------------------------------------
+ora.linux1.gsd application    0/5    0/0    ONLINE    ONLINE    linux1
+ora.linux1.ons application    0/3    0/0    ONLINE    ONLINE    linux1
+ora.linux1.vip application    0/0    0/0    ONLINE    ONLINE    linux1
+ora.linux2.gsd application    0/5    0/0    ONLINE    ONLINE    linux2
+ora.linux2.ons application    0/3    0/0    ONLINE    ONLINE    linux2
+ora.linux2.vip application    0/0    0/0    ONLINE    ONLINE    linux2
+
+Check CRS Status
+
+$ $ORA_CRS_HOME/bin/crsctl check crs
+
+Cluster Synchronization Services appears healthy
+Cluster Ready Services appears healthy
+Event Manager appears healthy
+
+
+Check Oracle Clusterware Auto-Start Scripts
+
+$ ls -l /etc/init.d/init.*
+-rwxr-xr-x 1 root root  2236 Dec 16 00:12 /etc/init.d/init.crs
+-rwxr-xr-x 1 root root  5290 Dec 16 00:12 /etc/init.d/init.crsd
+-rwxr-xr-x 1 root root 49416 Dec 16 00:12 /etc/init.d/init.cssd
+-rwxr-xr-x 1 root root  3859 Dec 16 00:12 /etc/init.d/init.evmd
+
+
+Status of all instances and services
+
+$ srvctl status database -d orcl
+Instance orcl1 is running on node linux1
+Instance orcl2 is running on node linux2
+
+Status of a single instance
+
+$ srvctl status instance -d orcl -i orcl2
+Instance orcl2 is running on node linux2
+
+Status of node applications on a particular node
+
+$ srvctl status nodeapps -n linux1
+VIP is running on node: linux1
+GSD is running on node: linux1
+Listener is running on node: linux1
+ONS daemon is running on node: linux1
+
+Status of an ASM instance
+
+$ srvctl status asm -n linux1
+ASM instance +ASM1 is running on node linux1.
+
+
+List all configured databases
+
+$ srvctl config database
+orcl
+
+Display configuration for our RAC database
+
+$ srvctl config database -d orcl
+linux1 orcl1 /u01/app/oracle/product/11.1.0/db_1
+linux2 orcl2 /u01/app/oracle/product/11.1.0/db_1
+
+Display the configuration for node applications - (VIP, GSD, ONS, Listener)
+
+$ srvctl config nodeapps -n linux1 -a -g -s -l
+VIP exists.: /linux1-vip/192.168.1.200/255.255.255.0/eth0
+GSD exists.
+ONS daemon exists.
+Listener exists.
+
+Display the configuration for the ASM instance(s)
+
+$ srvctl config asm -n linux1
++ASM1 /u01/app/oracle/product/11.1.0/db_1
+
+
+
+All running instances in the cluster
+
+SELECT
+    inst_id
+  , instance_number inst_no
+  , instance_name inst_name
+  , parallel
+  , status
+  , database_status db_status
+  , active_state state
+  , host_name host
+FROM gv$instance
+ORDER BY inst_id;
+
+ INST_ID  INST_NO INST_NAME  PAR STATUS  DB_STATUS    STATE     HOST
+-------- -------- ---------- --- ------- ------------ --------- -------
+       1        1 orcl1      YES OPEN    ACTIVE       NORMAL    linux1
+       2        2 orcl2      YES OPEN    ACTIVE       NORMAL    linux2
+
+All data files which are in the disk group
+
+select name from v$datafile
+union
+select member from v$logfile
+union
+select name from v$controlfile
+union
+select name from v$tempfile;
+
+NAME
+-------------------------------------------
++FLASH_RECOVERY_AREA/orcl/controlfile/current.256.641647319
++FLASH_RECOVERY_AREA/orcl/onlinelog/group_1.257.641647335
++FLASH_RECOVERY_AREA/orcl/onlinelog/group_2.258.641647359
++FLASH_RECOVERY_AREA/orcl/onlinelog/group_3.259.641655841
++FLASH_RECOVERY_AREA/orcl/onlinelog/group_4.260.641655867
++ORCL_DATA1/orcl/controlfile/current.256.641647315
++ORCL_DATA1/orcl/datafile/example.263.641647479
++ORCL_DATA1/orcl/datafile/indx.270.641663255
++ORCL_DATA1/orcl/datafile/sysaux.260.641647411
++ORCL_DATA1/orcl/datafile/system.259.641647373
++ORCL_DATA1/orcl/datafile/undotbs1.261.641647427
++ORCL_DATA1/orcl/datafile/undotbs2.264.641647497
++ORCL_DATA1/orcl/datafile/users.265.641647521
++ORCL_DATA1/orcl/datafile/users.269.641663137
++ORCL_DATA1/orcl/onlinelog/group_1.257.641647323
++ORCL_DATA1/orcl/onlinelog/group_2.258.641647349
++ORCL_DATA1/orcl/onlinelog/group_3.266.641655831
++ORCL_DATA1/orcl/onlinelog/group_4.267.641655855
++ORCL_DATA1/orcl/tempfile/temp.262.641647449
+
+19 rows selected.
+
+All ASM disk that belong to the 'ORCL_DATA1' disk group
+
+SELECT path
+FROM   v$asm_disk
+WHERE  group_number IN (select group_number
+                        from v$asm_diskgroup
+                        where name = 'ORCL_DATA1');
+
+PATH
+----------------------------------
+ORCL:VOL1
+ORCL:VOL2
+
+
+
+Stopping the Oracle RAC 11g Environment
+
+The first step is to stop the Oracle instance. Once the instance (and related services) is down, then bring down the ASM instance. Finally, shutdown the node applications (Virtual IP, GSD, TNS Listener, and ONS).
+$ export ORACLE_SID=orcl1
+$ emctl stop dbconsole
+$ srvctl stop instance -d orcl -i orcl1
+$ srvctl stop asm -n linux1
+$ srvctl stop nodeapps -n linux1
+
+Starting the Oracle RAC 11g Environment
+
+The first step is to start the node applications (Virtual IP, GSD, TNS Listener, and ONS). Once the node applications are successfully started, then bring up the ASM instance. Finally, bring up the Oracle instance (and related services) and the Enterprise Manager Database console.
+
+$ export ORACLE_SID=orcl1
+$ srvctl start nodeapps -n linux1
+$ srvctl start asm -n linux1
+$ srvctl start instance -d orcl -i orcl1
+$ emctl start dbconsole
+
+Start / Stop All Instances with SRVCTL
+
+Start / Stop all of the instances and its enabled services. I just included this for fun as a way to bring down all instances!
+
+$ srvctl start database -d orcl
+
+$ srvctl stop database -d orcl
+
+====================================================
+
+Split Brain Syndrome:
+
+split-brain it occurs when the instance members in a RAC fail to ping/connect to each other via this private interconnect, but the servers are all physically up and running and the database instance on each of these servers is also running. These individual nodes are running fine and can conceptually accept user connections and work independently. So basically due to lack of communication the instance thinks that the other instance that it is not able to connect is down and it needs to do something about the situation. The problem is if we leave these instance running, the same block might get read, updated in these individual instances and there would be data integrity issue, as the blocks changed in one instance, will not be locked and could be over-written by another instance. Oracle has efficiently implemented check for the split brain syndrome. 
+
+
+What is votting disk?
+
+Oracle Clusterware uses the voting disk to determine which instances are members of a cluster. The voting disk must reside on a shared disk. Basically all nodes in the RAC cluster register their heart-beat information on these voting disks. 
+
+====================================================
+
+ASH? (Active Session History) is a series of snapshots of the v$sessions and v$session_wait views over time - used to track session activity and simplify performance tuning.
+Snapshot are taken every second and stored in memory (v$active_session_history) for about 30 minutes. After that the data is flushed to the AWR (dba_hist_active_sess_history table).
+
+====================================================
+HOW DO SQL PROFILES WORK?
+
+To resolve the performance issue issue, Oracle 10g introduced SQL Profiles. Profiles store statement statistics in data dictionary in the form of hints as key inputs to the optimizer. 
+
+
+====================================================
+
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+====================================================
+
+
+

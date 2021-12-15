@@ -1,0 +1,40 @@
+Rac interview question(
+
+Installation steps
+
+background processes 
+
+cache fusion indepth 
+
+what is purpose of public and private IPs 
+
+split brain syndrome
+
+scan IP
+
+local listener and remote listener 
+
+rac components(ocr, voting disk, public and private network)
+
+how to take ocr backup and related details 
+
+how to add node and deleting node
+
+maintenance activities 
+
+crsctl check crs 
+
+crs_stat -t 
+
+disk group like external, normal, high
+
+
+hot patches
+
+opatch auto
+
+
+
+
+
+

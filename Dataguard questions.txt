@@ -1,0 +1,396 @@
+
+
+Data Guard Monitor (maximum 1) DMON
+
+DMON?
+The Data Guard broker process. DMON is started when Data Guard is started. This is broker controller process is the main broker process and is responsible for coordinating all broker actions as well as maintaining the broker configuration files. This process is enabled/disabled with the DG_BROKER_START parameter.
+
+Data Guard Broker Resource Manager RSM0
+The RSM process is responsible for handling any SQL commands used by the broker that need to be executed on one of the databases in the configuration.
+
+Data Guard NetServer/NetSlave NSVn
+These are responsible for making contact with the remote database and sending across any work items to the remote database. From 1 to n of these network server processes can exist. NSVn is created when a Data Guard broker configuration is enabled. There can be as many NSVn processes (where n is 0- 9 and A-U) created as there are databases in the Data Guard broker configuration.
+
+DRCn
+These network receiver processes establish the connection from the source database NSVn process. When the broker needs to send something (e.g. data or SQL) between databases, it uses this NSV to DRC connection. These connections are started as needed.
+
+Data Guard Broker Instance Slave Process INSV
+Performs Data Guard broker communication among instances in an Oracle RAC environment
+
+Data Guard Broker Fast Start Failover Pinger Process FSFP
+Maintains fast-start failover state between the primary and target standby databases. FSFP is created when fast-start failover is enabled.
+
+
+LGWR Network Server process LNS
+
+LNS?
+In Data Guard, LNS process performs actual network I/O and waits for each network I/O to complete. Each LNS has a user configurable buffer that is used to accept outbound redo data from the LGWR process. The NET_TIMEOUT attribute is used only when the LGWR process transmits redo data using a LGWR Network Server(LNS) process.
+
+MRP?
+Managed Recovery Process MRP
+In Data Guard environment, this managed recovery process will apply archived redo logs to the standby database.
+
+RFS?
+Remote File Server process RFS
+The remote file server process, in Data Guard environment, on the standby database receives archived redo logs from the primary database.
+
+Logical Standby Process LSP
+The logical standby process is the coordinator process for a set of processes that concurrently read, prepare, build, analyze, and apply completed SQL transactions from the archived redo logs. The LSP also maintains metadata in the database. The RFS process communicates with the logical standby process (LSP) to coordinate and record which files arrived.
+
+
+FAL?
+Fetch Archive Log (FAL) Server
+Services requests for archive redo logs from FAL clients running on multiple standby databases. Multiple FAL servers can be run on a primary database, one for each FAL request.
+
+Fetch Archive Log (FAL) Client
+Pulls archived redo log files from the primary site. Initiates transfer of archived redo logs when it detects a gap sequence
+
+
+DataGaurd Related Questions:
+=============================
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+1.What is Datagaurd? How it helps to do Disaster Recovery? 
+
+Data Guard is basically a ship redo and then apply redo, as you know redo is the information needed to recover a database transaction. 
+A production database referred to as a primary database transmits redo to one or more independent replicas referred to as standby databases. 
+Standby databases are in a continuous state of recovery, validating and applying redo to maintain synchronization with the primary database. 
+A standby database will also automatically resynchronize if it becomes temporary disconnected to the primary due to power outages, network problems, etc.
+Firstly the redo transport services transmits redo data from the primary to the standby as it is generated, 
+secondly services apply the redo data and update the standby database files, 
+thirdly independently of Data Guard the database writer process updates the primary database files and 
+lastly Data Guard will automatically resynchronize the standby database on power or network outages using redo data that has been archived at the primary.
+==============================================================================================================================
+2.What is Max Availability , Max Performance and Max Protection?
+
+Max Availability:
+=================
+
+Its first priority is to be available its second priority is zero loss protection, 
+thus it requires the SYNC redo transport. In the event that the standby server is unavailable the primary will wait the specified time in the NET_TIMEOUT parameter before giving up on the standby server and allowing the primary to continue to process. Once the connection has been re-established the primary will automatically resynchronize the standby database. 
+
+When the NET_TIMEOUT expires the LGWR process disconnects from the LNS process, acknowledges the commit and proceeds without the standby, processing continues until the current ORL is complete and the LGWR cycles into a new ORL, 
+a new LNS process is started and an attempt to connect to the standby server is made, 
+if it succeeds the new ORL is sent as normal, if not then LGWR disconnects again until the next log switch, 
+the whole process keeps repeating at every log switch, hopefully the standby database will become available at some point in time. Also in the background if you remember if any archive logs have been created during this time the 
+ARCH process will continually ping the standby database waiting until it come online.
+
+Max Performance:
+=================
+This mode requires ASYNC redo transport so that the LGWR process never waits for acknowledgement from the standby database, 
+also note that Oracle no longer recommends the ARCH transport method in previous releases is used for maximum performance.
+
+Difference between the max availability and max performance:
+--------------------------------------------------------------
+You might have noticed there is a potential loss of data if the primary goes down and the standby database has also been down for a period of time and 
+here has been no resynchronization, this is similar to Maximum Performance but you do give the standby server a chance to respond using the timeout.
+
+Max Protection:
+=================
+The priority for this mode is data protection, even to the point that it will affect the primary database. 
+This mode uses the SYNC redo transport and the primary will not issue a commit acknowledgement to the application 
+unless it receives an acknowledgement from at least one standby database, basically the primary will stall and eventually abort 
+preventing any unprotected commits from occurring. This guarantees complete data protection, 
+in this setup it is advised to have two separate standby databases at different locations with no Single Point Of Failures (SPOF's), 
+they should not use the same network infrastructure as this would be a SPOF. 
+
+==============================================================================================================================
+3.Is the standby database will create redo log file ?
+4.What is physical standby?
+5.What is logical standby?
+==============================================================================================================================
+6.How to check the gaps in archivelog shipment?
+v$archived_log
+v$log_history
+v$archive_gap
+
+SELECT ARCH.THREAD# "Thread", ARCH.SEQUENCE# "Last Sequence Received", APPL.SEQUENCE# "Last Sequence Applied",
+  2  (ARCH.SEQUENCE# - APPL.SEQUENCE#) "Difference"
+  3  FROM
+  4  (SELECT THREAD# ,SEQUENCE# FROM V$ARCHIVED_LOG WHERE (THREAD#,FIRST_TIME ) IN
+  5          (SELECT THREAD#,MAX(FIRST_TIME) FROM V$ARCHIVED_LOG GROUP BY THREAD#)) ARCH,
+(SELECT THREAD# ,SEQUENCE# FROM V$LOG_HISTORY WHERE (THREAD#,FIRST_TIME ) IN
+        (SELECT THREAD#,MAX(FIRST_TIME) FROM V$LOG_HISTORY GROUP BY THREAD#)) APPL
+  6    7    8  WHERE ARCH.THREAD# = APPL.THREAD#
+ORDER BY 1;  9
+==============================================================================================================================
+7.How the redolog or archivelog moves from primary to standby?
+
+Data Guard Redo Transport Services coordinate the transmission of redo from the primary database to the standby database, 
+at the same time the LGWR is processing redo, a separate Data Guard process called the Log Network Server (LNS) is reading from the redo buffer in the SGA and  passes redo to Oracle Net Services from transmission to a standby database, 
+it is possible to direct the redo data to nine standby databases, you can also use Oracle RAC and they don't all need to be a RAC setup. 
+The process Remote File Server (RFS) receives the redo from LNS and writes it to a  standby redo log file (SRL), 
+the LNS process support two modes synchronous and asynchronous.
+==============================================================================================================================
+8.List out the parameters used in datagaurd and its functionality?
+
+DB_UTRA_SAFE 	corruption-detections checks occur On the primary during redo transport - LGWR, LNS, ARCH use this parameter  in 11G.
+PARALLEL_EXECUTION_MESSAGE_SIZE to 64K   from 2K which is default. important for performance.    performance related important.
+DB_BLOCK_CHECKING  to medium typical or high impact 80% pf performance in OLTP and 15% in direct path operation.
+DB_LOST_WRITE_PROTECT 		(which can be set to NONE, TYPICAL and FULL). protects against eventual asyncronous WRITE errors. 
+
+NET_TIMEOUT 
+
+==============================================================================================================================
+9.What is datagaurd broker?
+
+the broker maintains the configuration files that includes profiles for all databases. 
+Change can be propagated to all databases within the configuration, 
+the broker also includes commands to start an observer, 
+the process that monitors the status of a Data Guard configuration and executes an automatic failover. 
+You might be think that the Data Guard broker is a single point of failure, which is incorrect, 
+broker processes are background processes that exist on each database in the configuration and communicate with each other. 
+if the system on which you are attached fails, you simple attach to another database within the configuration and resume management from there.
+
+distributed management tool that centralizes management , uses DGMGRL command line. 
+==============================================================================================================================
+10.What is fast start fail over and switch over in datagaurd?
+
+
+Switch over: (Planned)
+=============
+Failover: (unPlanned)
+=========
+
+
+
+
+
+==============================================================================================================================
+11.List out all the views which are used to check the datagaurd related information?
+
+
+Issue the following query to show information about the protection mode, the protection level, the role of the database, and switchover status:
+SELECT DATABASE_ROLE, DB_UNIQUE_NAME INSTANCE, OPEN_MODE, PROTECTION_MODE, PROTECTION_LEVEL, SWITCHOVER_STATUS FROM V$DATABASE;
+On the standby database, query the V$ARCHIVED_LOG view to identify existing files in the archived redo log.
+SELECT SEQUENCE#, FIRST_TIME, NEXT_TIME FROM V$ARCHIVED_LOG ORDER BY SEQUENCE#;
+Or
+SELECT THREAD#, MAX(SEQUENCE#) AS "LAST_APPLIED_LOG" FROM V$LOG_HISTORY GROUP BY THREAD#;
+On the standby database, query the V$ARCHIVED_LOG view to verify the archived redo log files were applied.
+SELECT SEQUENCE#,APPLIED FROM V$ARCHIVED_LOG ORDER BY SEQUENCE#;
+
+Query the physical standby database to monitor Redo Apply and redo transport services activity at the standby site.
+SELECT PROCESS, STATUS, THREAD#, SEQUENCE#, BLOCK#, BLOCKS FROM V$MANAGED_STANDBY;
+To determine if real-time apply is enabled, query the RECOVERY_MODE column of the V$ARCHIVE_DEST_STATUS view.
+SELECT RECOVERY_MODE FROM V$ARCHIVE_DEST_STATUS;
+The V$DATAGUARD_STATUS fixed view displays events that would typically be triggered by any message to the alert log or server process trace files.
+SELECT MESSAGE FROM V$DATAGUARD_STATUS;
+Determining Which Log Files Were Not Received by the Standby Site.
+SELECT LOCAL.THREAD#, LOCAL.SEQUENCE# FROM (SELECT THREAD#, SEQUENCE# FROM V$ARCHIVED_LOG WHERE DEST_ID=1) LOCAL WHERE LOCAL.SEQUENCE# NOT IN (SELECT SEQUENCE# FROM V$ARCHIVED_LOG WHERE DEST_ID=2 AND THREAD# = LOCAL.THREAD#);
+If a delayed apply has been specified or an archive log is missing then switchover may take longer than expected.
+Check v$managed_standby
+select process, status, sequence# from v$managed_standby;
+OR alternatively:
+select name, applied from v$archived_log;
+------------------------------------------------------------------
+Here is a useful document about the views related with dataguard:
+
+==============================================================================================================================
+12.What is observer?
+
+process that monitors the status of a Data Guard configuration and executes an automatic failover. 
+One point to mention is regarding a split-brain scenario, where the primary and standby both think that they are the primary database, 
+with Data Guard Fast-Start failover a failed primary cannot open without first receiving permission from the Data Guard observer process. 
+The observer will know that a failover has occurred and will refuse to allow the original primary to open. 
+The observer will automatically reinstate the failed primary as a standby for the new primary database making 
+it impossible to have a split-brain condition.
+
+==============================================================================================================================
+13.Database performance is not good after migrated to Datagaurd environment?
+check the tuning part below
+==============================================================================================================================
+14.What is the difference between Active Dataguard, and the Logical Standby implementation of 10g dataguard?
+
+==============================================================================================================================
+15.What are the uses of Oracle Data Guard?
+Disaaster recovery.
+==============================================================================================================================
+16.What is Redo Transport Services?
+Using LNS and RFS .
+==============================================================================================================================
+17.What is apply services?
+
+--Two methods in which to apply redo, Redo Apply (physical standby) and SQL Apply (logical standby). 
+
+Redo apply is basically a block-by-block physical replica of the primary database, 
+redo apply uses media recovery to read records from the SRL into memory and apply change vectors directly to the standby database.
+The apply processes read data blocks, assemble redo changes from mappings and then apply redo changes to the data blocks. 
+
+
+SQL apply uses the logical standby process (LSP) to coordinate the apply of changes to the standby database. 
+read the SRL and "mine" the redo by converting it to logical change records and then building SQL transactions and 
+applying SQL to the standby database and because there are more moving parts it requires more CPU, memory and I/O then redo apply
+SQL apply does not support all data types, 
+such as XML in object relational format and Oracle supplied types such as Oracle spatial, Oracle intermedia and Oracle text. 
+
+The benefits to SQL apply is that the database is open to read-write while apply is active, 
+while you can not make any changes to the replica data you can insert, 
+modify and delete data from local tables and schemas that have been added to the database, 
+you can even create materialized views and local indexes. This makes it ideal for reporting tools, etc to be used.
+
+The key features of this solution are
+
+-A standby database that is opened for read-write while SQL apply is active 
+-A guard setting that prevents the modification of data that is being maintained by the SQL apply 
+-Able to execute rolling database upgrades beginning with Oracle Database 11g using the KEEP IDENTITY clause
+
+LNS process has ceased transmitting redo to the standby database (network issues).
+The primary database continues writing to the current log file.
+Data Guard uses an ARCH process on the primary database to continuously ping the standby database during the outage.
+ARCH process queries the standby control file (via the RFS process) to determine the last complete log file.
+The ARCH process will then transmit the missing files to the standby database using additional ARCH processes.
+LNS will attempt and succeed in making a connection to the standby database and will begin transmitting the current redo while the ACH processes resolve the gap in the background.
+Once the standby apply process is able to catch up to he current redo logs.
+apply process automatically transitions out of reading the archive redo logs and into reading the current SRL. 
+==============================================================================================================================
+
+18.Rolling Database Upgrades Using SQL Apply ?
+19.What are the Data guard Protection modes and summarize each?
+==============================================================================================================================
+20.What is Synchronous transport?
+
+Synchronous transport (SYNC) is also referred to as "zero data loss" method 
+because the LGWR is not allowed to acknowledge a commit has succeeded 
+until the LNS can confirm that the redo needed to recover the transaction has been written at the standby site.
+
+This setup really does depend on network performance and can have a dramatic impact on the primary databases, 
+low latency on the network will have a big impact on response times. 
+The impact can be seen in the wait event "LNS wait on SENDREQ" found in the v$system_event dynamic performance view.
+
+LNS sends data through oracle net services to RFS standby database 
+it receives write confirmation from the disk then RFS send ACK to LNS then transaction commits.
+==============================================================================================================================
+21.what is asynchronous transport?
+
+Asynchronous transport (ASYNC)  eliminates the requirement that the LGWR waits for a acknowledgment from the LNS, 
+creating a "near zero" performance on the primary database regardless of distance between the primary and the standby locations. 
+The LGWR will continue to acknowledge commit success even if the bandwidth prevents the redo of previous transaction 
+from being sent to the standby database immediately. If the LNS is unable to keep pace and the log buffer is recycled before the redo is sent to the standby,
+ the LNS automatically transitions to reading and sending from the log file instead of the log buffer in the SGA. 
+Once the LNS has caught up it then switches back to reading directly from the buffer in the SGA.
+
+The log buffer ratio is tracked via the view X$LOGBUF_READHIST (11g) a low hit ratio indicates that the LNS is reading from the log file instead of the log buffer,
+ if this happens try increasing the log buffer size.
+select bufsize, rdmemblks, rddiskblks, hitrate from x$logbuf_readhist;
+
+The drawback with ASYNC is the increased potential for data loss, if a failure destroys the primary database before the transport lag is reduced to zero, 
+any committed transactions that are part of the transport lag are lost. So again make sure that the network bandwidth is adequate and that you get the 
+lowest latency possible. 
+==============================================================================================================================
+22.How to determine if Redo Apply has recovered all redo that has been received from the primary? ******* Performance
+
+SELECT * FROM V$DATAGUARD_STATS WHERE NAME=’apply lag’;
+
+To detect if a gap really does exist. run the below query on both database and find the difference.
+
+select 'Instance'||thread#||': Last Applied='||max(sequence#)||' (resetlogs_change#='||resetlogs_change#||')' from v$archived_log where applied = (select decode(database_role, 'PRIMARY', 'NO', 'YES') from v$database) and thread# in (select thread# from gv$instance) and resetlogs_change# = (select resetlogs_change# from v$database) group by thread#, resetlogs_change# order by thread#;
+
+Monitor the performance of media recovery by querying the V$RECOVERY_PROGRESS view.
+column Average Apply Rate: Redo Applied / Elapsed Time includes time spent actively applying redo and time spent waiting for redo to arrive.
+stop media recovery, allow several archive logs to accumulate, and then start media recovery. By doing so, you remove the idle time from the average apply rate and get a much more accurate picture of the true apply rate
+
+redo generate rate and recovery rates using (AWR) reports or V$SYSSTAT on both databases.
+
+select * from v$sysstat where name like '%redo blocks written%' ;		in primary 2_time_value - 1_time_value (p2 - p1) = redo generate rate.
+select * from v$sysstat where name like '%redo blocks read for recovery%';	in standby 2_time_value - 1_time_value (p2 - p1) = redo apply rate.
+
+Redo Generation Rate vs Redo Apply Rate In peak time:
+---2 * Max Primary Database Redo Generation Rate < Redo Apply Rate	Excellent – No tuning required with plenty of room for future growth
+---Max Primary Database Redo Generation Rate < Redo Apply Rate		Good – Tuning is Optional
+---Average Primary Redo Generation Rate < Redo Apply Rate		OK – Could benefit from tuning in order to accommodate peaks in workload
+---Average Primary Redo Generation Rate > Redo Apply Rate		Bad - Needs tuning.	
+
+==============================================================================================================================
+23.How to improve the performance of media recovery in standby database?
+---By default, media recovery uses the CPU_COUNT to determine the number of processes to use for recovery operations.
+---PARALLEL_EXECUTION_MESSAGE_SIZE = 65535. The message size parameter is used by all parallel query operations and pulls memory from the shared pool.(check shared_pool size).
+---Ensure that Oracle can use ASYNC I/O.  by default, the Oracle database is configured for asynchronous I/O.
+---Set the initialization parameter DISK_ASYNCH_IO=TRUE
+---If asynchronous I/O is not available, consider using the DBWR_IO_SLAVES parameter to simulate asynchronous I/O.
+---Set the DB_WRITER_PROCESSES parameter to a value greater than 1 when asynchronous I/O It is applicable if you have sufficient CPU and I/O bandwidth.
+---increase the buffer cache If receive high “free buffer wait” as a significant database wait event in V$SYSTEM_EVENT.
+---Increase the size of the primary database’s online redo log and standby database’s standby redo logs to reduce the number of times a full checkpoint is performed.
+
+
+======TUNING MEDIA RECOVERY
+Primary database:
+----------------- 
+---more query activity with many CPU intensive operations.
+---PID of the foreground process in V$PROCESS
+---Higher numbers of sorts or complex queries executed will require more CPU utilization.
+
+Standby database:
+------------------
+---media recovery instance is very write and update intensive.less overall CPU resources but equal or greater I/O or memory capacity.
+---MRP process (MRP0 PID found in V$MANAGED_STANDBY).
+---less no of CPU utilization during distinct rows have changed.
+
+Media Recovery require 3 phases:
+---Log read phase    	    reading of redo from the standby redo logs or archived redo logs by the recovery coordinator or MRP.
+---Redo Apply phase         reading of data blocks into the buffer cache and the application of redo, by parallel recovery slave processes. 
+			    The recovery coordinator (or MRP) ships redo to the recovery slaves using 
+			    the parallel query (PQ) interprocess communication framework.
+---Checkpoint Phase	    involves database writer (DBWR) flushing to disk modified (dirty) data blocks and 
+			    update of data file headers to record checkpoint completion.
+
+======Collect Data Necessary for Tuning
+
+---Timed_Statistics=TRUE
+---sar command
+---vmstat command
+---AWR reports from the primary database
+---Output from the following query from V$SYSSTAT run on a 60-second interval on the standby database: select name, value, to_char(sysdate, 'DD-MON-YYYY HH:MI:SS') from v$sysstat where value > 0 order by name;
+---Output from the following query from V$SYSTEM_EVENT run on a 60-second interval on the standby database:
+---Output from the following query on V$RECOVERY_PROGRESS run once at the completion of the media recovery operation on the standby:
+
+	Assess System Resources
+---If there are I/O bottlenecks or excessive wait I/Os,
+---Assess I/O read rates from standby redo logs or archived redo logs    % /bin/time dd if=/redo_logs/t_log8.f of=/dev/null bs=4096k
+---Check for excessive swapping or memory paging.
+---Check to ensure the recovery coordinator or MRP is not CPU bound during recovery.
+---If excessive CPU is being used, consider removing non-database CPU resource consuming programs off the system and setting DB_BLOCK_CHECKING to lower values.
+
+
+	Assess Database Waits
+
+---Database wait events from V$SYSTEM_EVENTS and V$SESSION_WAITS
+---Refer to the top 10 system wait events and tune the biggest waits first.(largest “TIME_WAITED” value).
+---If recovery is applying a lot of redo efficiently, the system will be I/O bound and the I/O wait should be reasonable for your system.
+
+
+Key Wait Event Table and solutions.
+
+---Log File Sequential Reads =	Coordinator (recovery session or MRP process) wait for log file read I/O. =	Tune Log Read I/O
+---PX Deq: Par Recov Reply   =  Coordinator synchronous wait for Slave (wait for checkpoints)		  = 	Increase PARALLEL EXECUTION MESSAGE SIZE to 65535
+---PX Deq Credit: send blkd
+---PX Deq Credit: need buffer=  Coordinator streaming wait for Slave (wait for apply)			  = 	Increase PARALLEL EXECUTION MESSAGE SIZE to 65535
+---Free buffer waits	     =  Foreground waiting available free buffer in the buffer cache		  =	Increase DB CACHE SIZE and remove any KEEP or RECYCLE POOL settings.
+---Direct path read	     =  Coordinator wait for file header read at log boundary checkpoint	  = 	Tune File Read I/O
+---Direct path write	     =  Coordinator wait for file header write at log boundary checkpoint	  = 	Tune File Write I/O
+---Checkpoint completed	     =  Wait for checkpoint completed						  =   	Tune File Write I/O  Increase number of DB WRITER PROCESSES
+---db file parallel read     =  Wait for data block read						  = 	Tune File Read I/O
+---recovery read	     =  OS kernel level to assure that the I/O rate was optimal			  =	fs.aio-max-nr = 1048576 and fs.aio-max-pinned = 1671168
+	TUNING CASE STUDIES
+Test Run     	Redo Volume Recovered	Sec for MR to complete recovery	     MB of Redo applied/second (Redo Apply Rate)	Percentage improvement on baseline
+---------	---------------		------------------------------		-----------------------------------		-------------------------------
+-baseline		8723 MB				1290 sec				6.7 MB/sec				n/a - baseline
+-Recovery Tuning	8723 MB				1134 sec				7.7 MB/sec				14%
+-Recovery + I/O Tuning	8723 MB				1009 sec				8.6 MB/sec				28%
+
+==============================================================================================================================	
+
+24.
+
+
+=======================================================================================================================
+
+25.Redo Transport & Network Configuration 
+26.
+27.Fast-Start Failover 
+28.Switchover and Failover Best Practices 
+29.Client Failover in Data Guard Configurations for Highly Available Oracle Databases 
+30.Managing Data Guard Configurations Having Multiple Standby Databases - Best Practices 
+31.
+32.
+33.Minimal Downtime Migration to ASM using Data Guard 
+
